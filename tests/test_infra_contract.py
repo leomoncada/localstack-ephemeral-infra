@@ -18,3 +18,20 @@ def test_receipts_table_has_point_in_time_recovery(aws, tf_outputs):
         "PointInTimeRecoveryDescription"
     ]["PointInTimeRecoveryStatus"]
     assert status == "ENABLED"
+
+
+def test_ingest_bucket_has_versioning_enabled(aws, tf_outputs):
+    s3 = aws("s3")
+    versioning = s3.get_bucket_versioning(Bucket=tf_outputs["ingest_bucket_name"])
+    assert versioning.get("Status") == "Enabled"
+
+
+def test_ingest_bucket_blocks_all_public_access(aws, tf_outputs):
+    s3 = aws("s3")
+    config = s3.get_public_access_block(
+        Bucket=tf_outputs["ingest_bucket_name"]
+    )["PublicAccessBlockConfiguration"]
+    assert config["BlockPublicAcls"]
+    assert config["IgnorePublicAcls"]
+    assert config["BlockPublicPolicy"]
+    assert config["RestrictPublicBuckets"]
