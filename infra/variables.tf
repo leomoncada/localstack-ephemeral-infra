@@ -10,9 +10,6 @@ variable "region" {
   default     = "us-east-1"
 }
 
-# Declared now for the CloudWatch log group(s) Tasks 4/5 will add; unused
-# until then.
-# tflint-ignore: terraform_unused_declarations
 variable "log_retention_days" {
   type        = number
   description = "CloudWatch log retention. Finite by policy; asserted by tests."

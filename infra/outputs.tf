@@ -13,3 +13,11 @@ output "ingest_bucket_name" {
 output "ingest_bucket_arn" {
   value = module.ingest_bucket.arn
 }
+
+output "processor_function_name" {
+  value = module.processor_lambda.function_name
+}
+
+output "processor_role_name" {
+  value = module.processor_lambda.role_name
+}

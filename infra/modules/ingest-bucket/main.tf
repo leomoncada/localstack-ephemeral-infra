@@ -1,6 +1,5 @@
 resource "aws_s3_bucket" "this" {
   #checkov:skip=CKV_AWS_18:Access logging needs a separate log-delivery bucket, which is outside this task's interface (an ingest bucket with versioning and public-access-block only); no log-target bucket exists in this repo.
-  #checkov:skip=CKV2_AWS_62:Event notifications need a subscriber (SQS/SNS/Lambda) for uploaded objects, which no task has introduced yet; nothing in this repo consumes ingest-bucket events.
   #checkov:skip=CKV_AWS_144:Cross-region replication needs a second bucket in another region; this is a single-region ephemeral LocalStack stack with no replica region configured.
   #checkov:skip=CKV_AWS_145:KMS is out of scope for this repo (not in docker-compose's SERVICES or the provider's endpoints block); the aws_s3_bucket_server_side_encryption_configuration below still applies AES256/SSE-S3 encryption at rest without a customer-managed CMK.
   bucket = "${var.project_name}-uploads"
