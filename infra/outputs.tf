@@ -21,3 +21,7 @@ output "processor_function_name" {
 output "processor_role_name" {
   value = module.processor_lambda.role_name
 }
+
+output "processor_dlq_url" {
+  value = module.processor_lambda.dlq_url
+}

@@ -58,6 +58,21 @@ def test_processor_role_grants_no_wildcard_resources(aws, tf_outputs):
     iam = aws("iam")
     role_name = tf_outputs["processor_role_name"]
 
+    # Inline policies are only half the surface. A managed policy would be
+    # invisible to the loop below, so a single attachment of, say,
+    # AWSLambdaBasicExecutionRole (logs:* on Resource "*") would silently
+    # defeat this entire test while leaving it green. The role is expected to
+    # carry no managed policies at all, so assert that directly.
+    attached = iam.list_attached_role_policies(RoleName=role_name)[
+        "AttachedPolicies"
+    ]
+    assert attached == [], (
+        f"role {role_name} has managed policies attached "
+        f"{[p['PolicyName'] for p in attached]}; their permissions are not "
+        "visible to the inline-policy check below, so least privilege can no "
+        "longer be asserted from inline policies alone"
+    )
+
     checked = 0
     for policy_name, document in _role_policy_documents(iam, role_name):
         for statement in document["Statement"]:

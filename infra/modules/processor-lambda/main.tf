@@ -77,13 +77,20 @@ resource "aws_lambda_function" "this" {
   #checkov:skip=CKV_AWS_173:KMS is out of scope for this repo (not in docker-compose's SERVICES or the provider's endpoints block); the single environment variable is a table name, not a secret, and is encrypted at rest under the AWS-managed Lambda key rather than a customer-managed CMK.
   #checkov:skip=CKV_AWS_272:Code signing requires AWS Signer, which is absent from docker-compose's SERVICES and from the provider's endpoints block; a signing profile also requires signing material issued against a real AWS account, which an ephemeral local stack has no way to hold.
   #checkov:skip=CKV_AWS_50:X-Ray tracing requires the xray service, which is absent from docker-compose's SERVICES and from the provider's endpoints block; enabling Active tracing would emit trace segments to an endpoint this stack does not serve.
-  function_name                  = "${var.project_name}-processor"
-  role                           = aws_iam_role.this.arn
-  handler                        = "app.handler"
-  runtime                        = "python3.12"
-  filename                       = data.archive_file.this.output_path
-  source_code_hash               = data.archive_file.this.output_base64sha256
-  timeout                        = 30
+  function_name    = "${var.project_name}-processor"
+  role             = aws_iam_role.this.arn
+  handler          = "app.handler"
+  runtime          = "python3.12"
+  filename         = data.archive_file.this.output_path
+  source_code_hash = data.archive_file.this.output_base64sha256
+  timeout          = 30
+
+  # 5 concurrent executions: the ingest workload is a trickle of independent
+  # single-object events, so this is well above steady-state demand while
+  # still bounding the writer count against the receipts table and capping the
+  # blast radius of a sudden bulk upload. Any finite limit satisfies
+  # CKV_AWS_115; this one is sized to the workload rather than picked to
+  # silence it.
   reserved_concurrent_executions = 5
 
   environment {
