@@ -1,11 +1,13 @@
 module "receipts_table" {
   source       = "./modules/receipts-table"
   project_name = var.project_name
+  kms_key_arn  = aws_kms_key.stack.arn
 }
 
 module "ingest_bucket" {
   source       = "./modules/ingest-bucket"
   project_name = var.project_name
+  kms_key_arn  = aws_kms_key.stack.arn
 }
 
 module "processor_lambda" {
@@ -17,6 +19,7 @@ module "processor_lambda" {
   receipts_table_arn  = module.receipts_table.arn
   ingest_bucket_arn   = module.ingest_bucket.arn
   log_retention_days  = var.log_retention_days
+  kms_key_arn         = aws_kms_key.stack.arn
 }
 
 resource "aws_lambda_permission" "allow_ingest_bucket" {

@@ -9,12 +9,12 @@ failures overstates them.
 
 ## Endpoint targeting
 
-**Chosen mechanism:** variant B — the spec's empty-string endpoint pattern
+**Chosen mechanism:** variant B — the empty-string endpoint pattern
 (`endpoints { s3 = var.aws_endpoint_url ... }` with `s3_use_path_style`,
 `skip_credentials_validation`, `skip_metadata_api_check`, and
 `skip_requesting_account_id` all gated on `var.aws_endpoint_url != ""`).
 Variant A (pure `AWS_ENDPOINT_URL` env var, no provider-level endpoint
-configuration) was tried first per the spike's priority order but failed.
+configuration) was the preferred design and was tried first, but failed.
 
 **Expected:** variant A — setting `AWS_ENDPOINT_URL=http://localhost:4566`
 plus dummy credentials, with zero endpoint configuration in the provider
@@ -60,7 +60,7 @@ invalid` — a genuine credentials error against real AWS's STS endpoint, not
 an endpoint-parsing error. This confirms the empty-string fallback correctly
 routes to real AWS when no LocalStack endpoint is supplied.
 
-**Later tasks must use:** the variant B provider block, with a variable
+**Configuration that works:** the variant B provider block, with a variable
 (e.g. `aws_endpoint_url`, default `""`) feeding `endpoints { s3 = ...
 sts = ... iam = ... lambda = ... dynamodb = ... }`, and
 `s3_use_path_style` / `skip_credentials_validation` /
@@ -129,7 +129,7 @@ is sufficient; the backend block must additionally carry the LocalStack
 `use_path_style` flags (mirroring the provider block) since the backend's
 AWS client configuration is independent of the provider's.
 
-**Later tasks must use in the backend config:**
+**Backend configuration that works:**
 ```hcl
 bucket                      = "<state-bucket>"
 key                         = "<state-key>"
@@ -210,6 +210,87 @@ $ docker compose exec -T localstack awslocal dynamodb describe-continuous-backup
 
 **Workaround:** none needed. `test_receipts_table_has_point_in_time_recovery`
 asserts against the live API response, as originally intended.
+
+## Customer-managed KMS keys
+
+**Expected:** this repository previously carried five `checkov:skip`
+justifications saying KMS was out of scope because it was "not in
+docker-compose's SERVICES or the provider's endpoints block". That reasoning
+was circular -- both of those files are ours -- and wrong about the product:
+since LocalStack 2.0, `SERVICES` no longer gates availability (services start
+lazily on first request) and KMS is Community-tier. So the expectation put
+under test was the opposite one: a customer-managed CMK created in Terraform
+should be able to encrypt the ingest bucket, the receipts table, the
+dead-letter queue, the log group and the Lambda's environment, against
+LocalStack Community.
+
+**Observed:** four of the five work. The key is real -- `KeyManager:
+CUSTOMER`, not one of LocalStack's own -- and each resource reports the key
+ARN back through its live API:
+
+```
+$ docker compose exec -T localstack awslocal kms describe-key \
+    --key-id alias/ephemeral-infra --query 'KeyMetadata.{Arn:Arn,State:KeyState,Manager:KeyManager}'
+{ "Arn": "arn:aws:kms:us-east-1:000000000000:key/ae858cbb-...", "State": "Enabled", "Manager": "CUSTOMER" }
+
+$ awslocal s3api get-bucket-encryption --bucket ephemeral-infra-uploads
+  ... "SSEAlgorithm": "aws:kms", "KMSMasterKeyID": "arn:aws:kms:...:key/ae858cbb-...", "BucketKeyEnabled": true
+
+$ awslocal dynamodb describe-table --table-name ephemeral-infra-receipts --query Table.SSEDescription
+{ "Status": "ENABLED", "SSEType": "KMS", "KMSMasterKeyArn": "arn:aws:kms:...:key/ae858cbb-..." }
+
+$ awslocal sqs get-queue-attributes --queue-url .../ephemeral-infra-processor-dlq \
+    --attribute-names KmsMasterKeyId
+  ... "KmsMasterKeyId": "arn:aws:kms:...:key/ae858cbb-..."
+
+$ awslocal logs describe-log-groups --log-group-name-prefix /aws/lambda/ephemeral-infra-processor
+  ... "kmsKeyId": "arn:aws:kms:...:key/ae858cbb-..."
+```
+
+The fifth does not. LocalStack accepts `kms_key_arn` on the Lambda function
+without error, and then does not persist it:
+
+```
+$ awslocal lambda get-function-configuration --function-name ephemeral-infra-processor \
+    --query '{KMSKeyArn:KMSKeyArn}'
+{ "KMSKeyArn": null }
+```
+
+Terraform therefore reads the attribute back as unset, and every plan after a
+successful apply proposes the same update forever:
+
+```
+  # module.processor_lambda.aws_lambda_function.this will be updated in-place
+  ~ resource "aws_lambda_function" "this" {
+      + kms_key_arn = "arn:aws:kms:us-east-1:000000000000:key/ae858cbb-..."
+    }
+Plan: 0 to add, 1 to change, 0 to destroy.
+```
+
+A smaller divergence surfaced alongside it. On real AWS `kms_master_key_id`
+and `sqs_managed_sse_enabled` are mutually exclusive, and setting a CMK leaves
+`SqsManagedSseEnabled` reported as `false`. LocalStack reports **both**: the
+CMK ARN in `KmsMasterKeyId` *and* `SqsManagedSseEnabled: "true"`. Terraform
+proposes no change over it, so it costs nothing here -- but a test asserting
+`SqsManagedSseEnabled == "false"` would pass on one target and fail on the
+other.
+
+**Workaround:** the CMK is kept everywhere it works -- bucket, table,
+dead-letter queue, log group -- and the four suppressions that used to cover
+them (`CKV_AWS_145`, `CKV_AWS_119`, `CKV_AWS_27`, `CKV_AWS_158`) are deleted
+rather than reworded. On the Lambda, `kms_key_arn` is removed and
+`CKV_AWS_173` is suppressed on a threat-model argument instead: the single
+environment variable is a DynamoDB table name that is already published in
+this stack's outputs. The obvious alternative, `lifecycle { ignore_changes =
+[kms_key_arn] }`, was rejected -- it is LocalStack-shaped configuration living
+permanently in code whose entire claim is that it contains none.
+
+Three new suppressions were added on the key policy itself (`CKV_AWS_356`,
+`CKV_AWS_111`, `CKV_AWS_109`). Those are a false-positive class rather than a
+divergence: checkov reads a KMS key policy as an identity policy, where
+`Resource = "*"` would mean the whole account. In a key policy it means "this
+key", and the KMS API rejects anything else. Net: eleven suppressions before,
+ten after, and none of the ten now argues from `SERVICES`.
 
 ## Asynchronous dead-letter routing latency
 

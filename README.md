@@ -17,8 +17,9 @@ measurements are less flattering than the slogan.
 
 ## Quickstart
 
-Requires Docker, Terraform (>= 1.9; CI pins 1.14.8), Python 3.12 and `make`. Nothing else — no AWS
-account, no credentials, no `awscli` configuration.
+Requires Docker, Terraform (>= 1.11; CI pins 1.14.8), Python 3.12 and `make`. Nothing else — no AWS
+account, no credentials, no `awscli` configuration. The floor is 1.11 because the S3 backend locks
+with `use_lockfile`, which landed in 1.10 and is GA in 1.11.
 
 ```bash
 make up       # start LocalStack
@@ -28,7 +29,10 @@ make destroy  # tear it down
 ```
 
 `make lint` runs `terraform fmt -check`, `terraform validate`, `tflint` and `checkov` — the same
-four commands CI runs, from the same target, so they cannot drift apart.
+four commands CI runs, from the same target, so they cannot drift apart. `tflint` runs `--init`
+first (it needs the AWS ruleset from `.tflint.hcl`; without it only the bundled Terraform ruleset
+loads and no `aws_*` rule fires) and `--recursive`, so it reaches `infra/modules/*` where every AWS
+resource actually lives.
 
 ## Architecture
 
@@ -40,11 +44,19 @@ S3 (uploads/)  --ObjectCreated-->  Lambda (processor)  -->  DynamoDB (receipts)
                                                               see "What is tested" below)
 ```
 
-Thirteen resources: eleven across three modules (`ingest-bucket`, `processor-lambda`,
-`receipts-table`), plus the bucket notification and the Lambda permission that wire them together.
-The bucket has versioning on, server-side encryption configured and all public access blocked. The
-table has point-in-time recovery enabled. The execution role carries four inline statements, each scoped to a concrete ARN, and no
-attached managed policies. The log group has a finite, parameterised retention.
+Fifteen resources: eleven across three modules (`ingest-bucket`, `processor-lambda`,
+`receipts-table`), plus the bucket notification and the Lambda permission that wire them together,
+plus a KMS key and its alias. The bucket has versioning on and all public access blocked. The table
+has point-in-time recovery enabled. The execution role carries five inline statements, each scoped
+to a concrete ARN, and no attached managed policies. The log group has a finite, parameterised
+retention.
+
+One customer-managed KMS key encrypts the bucket, the table, the dead-letter queue and the log
+group. That is not decoration: those four resources previously carried `checkov:skip` comments
+claiming KMS was unavailable because it was absent from `docker-compose.yml`'s `SERVICES` — a
+circular argument from a file this repository writes, and wrong about LocalStack, which has started
+services lazily since 2.0. Enabling it deleted four suppressions. The one place it did not work is
+recorded in [`PARITY-NOTES.md`](PARITY-NOTES.md).
 
 Terraform state lives in an S3 backend with `use_lockfile = true` — inside LocalStack for the local
 target, created by an init hook at container start so `terraform init` works against a cold
@@ -78,6 +90,7 @@ provider "aws" {
     logs     = var.aws_endpoint_url
     sqs      = var.aws_endpoint_url
     events   = var.aws_endpoint_url
+    kms      = var.aws_endpoint_url
   }
 
   s3_use_path_style           = var.aws_endpoint_url != ""
@@ -88,10 +101,11 @@ provider "aws" {
 ```
 
 LocalStack: `terraform apply -var aws_endpoint_url=http://localhost:4566` (what `make apply` does).
-Real AWS: leave the variable at its default and point `init` at `infra/env/aws.backend.hcl`.
+Real AWS: leave the variable at its default and point `init` at `infra/env/aws.backend.hcl` (what
+`make apply-aws` does).
 
 There are no `count` guards, no conditional resource logic, no `local/` directory and no provider
-aliases. The same thirteen resources are planned for both targets; the only difference between the
+aliases. The same fifteen resources are planned for both targets; the only difference between the
 two worlds is one string and one backend config file.
 
 What the code does contain is provider-level endpoint configuration, and that is worth being precise
@@ -108,6 +122,42 @@ only this far: with the default empty endpoint, `terraform plan` reaches real AW
 fails with `403 InvalidClientTokenId`. That proves the empty-string fallback routes to AWS rather
 than mis-parsing an endpoint. It does not prove the stack applies cleanly there, and nothing in this
 repository does.
+
+### Running against real AWS
+
+The other half of the thesis has an invocation, so that it is a command someone can run rather than
+a paragraph. Fill in a state bucket you own in `infra/env/aws.backend.hcl`, then:
+
+```bash
+make apply-aws    # init against env/aws.backend.hcl, then apply with no -var
+make test-aws     # the same seven tests, unmodified
+make destroy-aws
+```
+
+Those targets strip the LocalStack endpoint and the `test`/`test` credentials that the default
+targets export (`env -u`, so the AWS credential chain sees them as absent rather than as empty
+strings) and pass no `-var`, which leaves `aws_endpoint_url` at its default `""`. Terraform keeps
+one initialised working directory, so `make apply` and `make apply-aws` are mutually exclusive:
+switching targets re-runs `init -reconfigure`.
+
+**None of these has ever been run against a real account,** and the paragraph above still stands.
+Two things are expected to need attention on a first real run. Naming them is more useful than a
+general disclaimer:
+
+- **The ingest bucket's name is not globally unique.** It is `${var.project_name}-uploads`, and
+  `project_name` defaults to `ephemeral-infra`. S3 bucket names live in one namespace shared by
+  every AWS account on earth, so a project prefix buys no collision protection whatsoever:
+  `ephemeral-infra-uploads` may already exist in a stranger's account, and the apply would fail with
+  `BucketAlreadyExists`. A real run needs `-var project_name=<something-account-unique>`; a
+  production version of this module would append the account ID or a random suffix rather than
+  leaving the caller to remember.
+- **LocalStack is the more permissive of the two targets.** The lifecycle rule in `ingest-bucket`
+  now carries `filter {}` because the real S3 API requires every rule to specify exactly one of
+  `filter` or `prefix`, while LocalStack accepts a rule with neither. That specific one is fixed —
+  it was found by reading the S3 API contract, not by running against AWS — but it is the shape of
+  the risk: a resource that applies cleanly here can still be rejected there.
+
+`var.log_retention_days` is a third; it has its own section below.
 
 ## Why not `tflocal`
 
@@ -184,7 +234,8 @@ the deployed state of the world, which is a stronger claim than a static-analysi
 malformed upload is rejected cleanly.
 
 **The dead-letter queue, stated precisely.** An SQS DLQ is provisioned, wired as the Lambda's
-`dead_letter_config` target, granted `sqs:SendMessage` on its own ARN and encrypted with SSE-SQS.
+`dead_letter_config` target, granted `sqs:SendMessage` on its own ARN and encrypted with SSE-KMS
+under the stack's customer-managed key.
 Its test coverage is **negative only**: the suite asserts that a malformed upload leaves the DLQ
 *empty*, which proves the handler rejects bad input cleanly rather than crashing and routing. That a
 message *does* arrive on a genuine infrastructure-level failure was observed manually during
@@ -213,6 +264,6 @@ leaving it to sit quietly inside a `#checkov:skip` comment.
 [`PARITY-NOTES.md`](PARITY-NOTES.md) is the field register: expected / observed / workaround, for
 each divergence and each anticipated-risk-that-did-not-materialise found while building this. It
 covers endpoint targeting, S3 native state locking, `describe_continuous_backups`,
-`AWS_ENDPOINT_URL` injection into the Lambda container, dead-letter latency, and the Docker-in-Docker
-Lambda executor on GitHub-hosted runners. Notes, not grievances — several entries record things that
+`AWS_ENDPOINT_URL` injection into the Lambda container, customer-managed KMS keys, dead-letter
+latency, SQS teardown time, and the Docker-in-Docker Lambda executor on GitHub-hosted runners. Notes, not grievances — several entries record things that
 worked.

@@ -27,3 +27,8 @@ variable "log_retention_days" {
   type        = number
   description = "CloudWatch retention in days."
 }
+
+variable "kms_key_arn" {
+  type        = string
+  description = "Customer-managed KMS key for the log group and the dead-letter queue, and which the execution role is granted use of."
+}

@@ -13,6 +13,7 @@ provider "aws" {
     logs     = var.aws_endpoint_url
     sqs      = var.aws_endpoint_url
     events   = var.aws_endpoint_url
+    kms      = var.aws_endpoint_url
   }
 
   s3_use_path_style           = var.aws_endpoint_url != ""

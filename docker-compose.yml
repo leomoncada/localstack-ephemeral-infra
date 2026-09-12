@@ -6,13 +6,20 @@ services:
       - "4566:4566"
     environment:
       DEBUG: ${DEBUG:-0}
-      SERVICES: s3,lambda,dynamodb,iam,sts,logs,sqs,events
+      SERVICES: s3,lambda,dynamodb,iam,sts,logs,sqs,events,kms
       LAMBDA_RUNTIME_EXECUTOR: docker
     volumes:
       - "./localstack/init/ready.d:/etc/localstack/init/ready.d"
       - "/var/run/docker.sock:/var/run/docker.sock"
+    # Readiness is defined once, here, and consumed by `docker compose up -d
+    # --wait` in `make up`. It deliberately does not test /_localstack/health:
+    # that endpoint answers 200 *before* the init/ready.d hooks run, and the
+    # hook is what creates the `tfstate` bucket that `make init` needs on its
+    # very next command. The bucket is the real precondition, so the bucket is
+    # what is polled.
     healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://localhost:4566/_localstack/health || exit 1"]
-      interval: 5s
-      timeout: 5s
-      retries: 20
+      test: ["CMD-SHELL", "awslocal s3api head-bucket --bucket tfstate || exit 1"]
+      interval: 3s
+      timeout: 10s
+      retries: 40
+      start_period: 10s

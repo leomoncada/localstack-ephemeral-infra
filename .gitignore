@@ -1,6 +1,5 @@
 # Terraform
 .terraform/
-.terraform.lock.hcl
 *.tfstate
 *.tfstate.*
 crash.log
@@ -20,9 +19,11 @@ venv/
 # Build artifacts
 dist/
 *.zip
+infra/modules/processor-lambda/.build/
 
 # OS
 .DS_Store
 
-# Subagent-driven development scratch workspace
+# Local planning scratch
 .superpowers/
+docs/superpowers/
