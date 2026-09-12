@@ -1,0 +1,18 @@
+services:
+  localstack:
+    image: localstack/localstack:4
+    container_name: localstack-ephemeral-infra
+    ports:
+      - "4566:4566"
+    environment:
+      DEBUG: ${DEBUG:-0}
+      SERVICES: s3,lambda,dynamodb,iam,sts,logs,sqs,events
+      LAMBDA_RUNTIME_EXECUTOR: docker
+    volumes:
+      - "./localstack/init/ready.d:/etc/localstack/init/ready.d"
+      - "/var/run/docker.sock:/var/run/docker.sock"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:4566/_localstack/health || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
