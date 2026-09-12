@@ -18,15 +18,31 @@ block — would let `terraform apply` transparently target LocalStack.
 
 **Observed:** `terraform init` and `terraform plan` succeeded, but
 `terraform apply` hung indefinitely on `aws_s3_bucket.probe: Still
-creating...` past 4 minutes with no error and no bucket ever appearing in
-LocalStack (`awslocal s3api list-buckets` stayed empty the whole time). The
-global `AWS_ENDPOINT_URL` env var was not honored by the AWS provider
-v6.64.0 for the S3 create-bucket call in this setup, so the request went to
-real AWS instead, where it stalled rather than failing fast on the fake
-`test`/`test` credentials. The process was killed manually after the
-timebox made it clear this was not going to resolve.
+creating...` past 4 minutes with no error. The process was killed manually
+after the timebox made it clear this was not going to resolve. The decisive
+check was negative: `awslocal s3api list-buckets` inside the container
+stayed empty for the whole 4 minutes, so the bucket was never created in
+LocalStack. That is the only thing confirmed — the request did not reach
+LocalStack. Where it actually went, and why it hung rather than erroring,
+is **undetermined**. Two explanations are consistent with the symptom and
+neither was ruled out:
+  - the global `AWS_ENDPOINT_URL` env var was not honored by the AWS
+    provider v6.64.0 for this S3 call, so the request went to real AWS and
+    stalled there instead of failing fast; or
+  - the request never left the host at all — network egress being blocked
+    or silently dropped (sandboxed shell, firewall dropping SYNs) produces
+    an identical indefinite hang with LocalStack never seeing anything.
 
-**Workaround:** switched to variant B — explicit `endpoints { s3 = ...
+  The first explanation cannot be asserted with confidence: the variant-B
+  fallback test below shows real AWS rejecting the same `test`/`test`
+  credentials **fast**, with a non-retryable `403 InvalidClientTokenId` — if
+  bad credentials fail fast there, they cannot also explain a 4-minute
+  hang here. No packet capture or egress test was run to distinguish the
+  two, so the cause is left open rather than asserted.
+
+**Workaround:** the request not reaching LocalStack, for whatever reason,
+means variant A cannot be relied on. Switched to variant B — explicit
+`endpoints { s3 = ...
 sts = ... iam = ... }` in the provider block, gated by an
 `aws_endpoint_url` variable defaulting to `""`. With
 `-var aws_endpoint_url=http://localhost:4566`, `terraform apply` completed
@@ -71,6 +87,31 @@ a printed `Lock Info` block (lock ID, path, operation, holder, timestamp).
 This is exactly S3's conditional-write locking mechanism rejecting a
 second writer, proving `use_lockfile` provides working mutual exclusion
 against LocalStack Community. No DynamoDB lock table was needed.
+
+Captured output from the second (blocked) apply, verbatim:
+
+```
+Error: Error acquiring the state lock
+
+Error message: operation error S3: PutObject, https response error
+StatusCode: 412, RequestID: b15bbf21-f236-429d-8a14-044222969b12, HostID:
+s9lzHYrFp76ZVxRcpX9+5cjAnEH2ROuNkd2BHfIa6UkFVdtjf5mKR3/eTPFvsiP/XV/VLi31234=,
+api error PreconditionFailed: At least one of the pre-conditions you
+specified did not hold
+Lock Info:
+  ID:        8a1b8378-d2d9-3261-4873-e24d88b4bc6d
+  Path:      tfstate-probe/probe/terraform.tfstate
+  Operation: OperationTypeApply
+  Who:       leomar@MacBook-Pro-de-Leomar-2.local
+  Version:   1.14.8
+  Created:   2026-09-12 14:45:40.633526 +0000 UTC
+  Info:
+
+Terraform acquires a state lock to protect the state from being written
+by multiple users at the same time. Please resolve the issue above and try
+again. For most commands, you can disable locking with the "-lock=false"
+flag, but this is not recommended.
+```
 
 **Workaround:** none needed. `use_lockfile = true` in the S3 backend block
 is sufficient; the backend block must additionally carry the LocalStack
