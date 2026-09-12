@@ -102,7 +102,7 @@ Lock Info:
   ID:        8a1b8378-d2d9-3261-4873-e24d88b4bc6d
   Path:      tfstate-probe/probe/terraform.tfstate
   Operation: OperationTypeApply
-  Who:       leomar@MacBook-Pro-de-Leomar-2.local
+  Who:       <redacted>@<redacted-host>
   Version:   1.14.8
   Created:   2026-09-12 14:45:40.633526 +0000 UTC
   Info:
@@ -112,6 +112,12 @@ by multiple users at the same time. Please resolve the issue above and try
 again. For most commands, you can disable locking with the "-lock=false"
 flag, but this is not recommended.
 ```
+
+The `Who` field's user and host identifiers were redacted above; nothing
+else in the block was altered. The `RequestID` differs between independent
+runs (it is per-request), but the `HostID` was checked against an earlier,
+separate test run and is byte-for-byte identical there too — confirming it
+is a static value LocalStack's S3 mock returns, not a hand-typed string.
 
 **Workaround:** none needed. `use_lockfile = true` in the S3 backend block
 is sufficient; the backend block must additionally carry the LocalStack
