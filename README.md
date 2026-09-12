@@ -58,6 +58,12 @@ circular argument from a file this repository writes, and wrong about LocalStack
 services lazily since 2.0. Enabling it deleted four suppressions. The one place it did not work is
 recorded in [`PARITY-NOTES.md`](PARITY-NOTES.md).
 
+Unlike the properties listed above it, **the key configuration is not asserted by any test.** It was
+verified during development by reading the CMK ARN back from each resource's live API
+(`get-bucket-encryption`, `describe-table`, `get-queue-attributes`, `describe-log-groups`), and that
+output is in [`PARITY-NOTES.md`](PARITY-NOTES.md) — but nothing in the suite would notice if it
+regressed. Read it as configured and manually verified, not as executable policy.
+
 Terraform state lives in an S3 backend with `use_lockfile = true` — inside LocalStack for the local
 target, created by an init hook at container start so `terraform init` works against a cold
 container with no bootstrap step.
@@ -184,7 +190,8 @@ LocalStack figures are **measured**, from GitHub Actions run
 [`34705348618`](https://github.com/leomoncada/localstack-ephemeral-infra/actions/runs/34705348618)
 (job step `started_at`/`completed_at`). Real-AWS figures were **not measured** — no apply against a
 real account has been run — so every cell in that column is an estimate and is labelled as one in
-the table itself.
+the table itself. That run predates the KMS key and its alias, so the timings below describe the
+same stack two resources lighter; they have not been re-measured.
 
 | | LocalStack | Real AWS |
 |---|---|---|
@@ -213,7 +220,7 @@ Two things that table does not say, and should:
 
 - **The 70.0 s provision is not a dramatic speed win over real AWS for a stack this small.** It
   includes `terraform init` (provider download) because `make apply` depends on `make init`. For
-  thirteen resources, a real-AWS apply is in the same order of magnitude. The speed argument in the
+  fifteen resources, a real-AWS apply is in the same order of magnitude. The speed argument in the
   thesis gets stronger as a stack grows and as the loop repeats; it is not carried by this stack's
   apply time alone.
 - **What is unambiguous is the rest of the row.** The full cycle — provision, integration-test

@@ -1,10 +1,14 @@
 data "aws_caller_identity" "current" {}
 
 # One customer-managed key for the whole stack: the ingest bucket, the receipts
-# table, the dead-letter queue, the Lambda's environment and its log group all
-# encrypt under it. A key per resource would buy independent rotation and
-# revocation between components that share a single trust boundary and a single
-# lifetime, which this stack does not need.
+# table, the dead-letter queue and the Lambda's log group all encrypt under it.
+# A key per resource would buy independent rotation and revocation between
+# components that share a single trust boundary and a single lifetime, which
+# this stack does not need.
+#
+# The Lambda's environment block is the one thing not on that list. See the
+# CKV_AWS_173 justification in modules/processor-lambda/main.tf for why
+# `kms_key_arn` was implemented, applied, and then withdrawn.
 data "aws_iam_policy_document" "stack_key" {
   #checkov:skip=CKV_AWS_356:A KMS key policy is already scoped by the key it is attached to, and the KMS API rejects any Resource other than "*" -- there, "*" means "this key" and nothing else. These three checks read the document as an identity policy, where "*" would mean every resource in the account. The narrowing that does exist is in the second statement's ArnLike condition on kms:EncryptionContext, and in the caller-side grant in modules/processor-lambda, which is scoped to this key ARN.
   #checkov:skip=CKV_AWS_111:See CKV_AWS_356 above. The account-root statement is not optional either: KMS refuses a key policy that leaves no principal able to administer the key, and this statement is what lets IAM policies govern use of it at all. It is AWS's own documented default key policy, unmodified.
