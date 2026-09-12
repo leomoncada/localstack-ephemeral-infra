@@ -3,6 +3,10 @@
 Divergences found while building this repository, against LocalStack Community.
 Format: expected / observed / worked around.
 
+Anticipated risks that did **not** materialise are recorded here too, in the
+same format with "no workaround needed". A register that only lists the
+failures overstates them.
+
 ## Endpoint targeting
 
 **Chosen mechanism:** variant B — the spec's empty-string endpoint pattern
@@ -144,3 +148,133 @@ endpoints = {
 These LocalStack-only lines must be conditional/omitted for real-AWS runs,
 the same way the provider block gates its `endpoints` on
 `aws_endpoint_url != ""`.
+
+## `AWS_ENDPOINT_URL` injection into the Lambda container
+
+**Expected:** the Lambda handler would need the endpoint passed to it
+explicitly — a Terraform-set `AWS_ENDPOINT_URL` environment variable on the
+function, conditional on the target — because a `boto3` client built inside
+the function has no way to know it is running in LocalStack. That would have
+meant target-specific configuration reaching into application code, which is
+the one thing the repository's thesis claims is unnecessary.
+
+**Observed:** LocalStack injects `AWS_ENDPOINT_URL` into the Lambda execution
+container itself, pointing at its own container IP. Verified by inspecting
+the live container's environment rather than inferred from behaviour:
+
+```
+$ docker inspect localstack-ephemeral-infra-lambda-ephemeral-infra-processor-... \
+    --format '{{range .Config.Env}}{{println .}}{{end}}' | grep -E 'AWS_ENDPOINT_URL|RECEIPTS_TABLE'
+AWS_REGION=us-east-1
+AWS_ENDPOINT_URL=http://172.20.0.2:4566
+RECEIPTS_TABLE=ephemeral-infra-receipts
+```
+
+Terraform sets only `RECEIPTS_TABLE` — confirmed by
+`awslocal lambda get-function-configuration --query 'Environment'`, which
+returns that single variable. The `AWS_ENDPOINT_URL` entry is LocalStack's,
+not ours.
+
+**Workaround:** none needed, and the planned fallback (threading an
+`aws_endpoint_url` variable through to `environment.variables`) was not taken.
+The handler's `os.environ.get("AWS_ENDPOINT_URL") or None` idiom therefore
+works unmodified on both targets: LocalStack supplies the value, real AWS
+leaves it unset and `boto3` resolves the public endpoints. This is the
+mechanism that lets the same handler source run against either target without
+a build-time switch.
+
+## DynamoDB `describe_continuous_backups`
+
+**Expected:** a risk flagged before implementation — that
+`describe_continuous_backups` might be unimplemented on Community tier, which
+would have made the point-in-time-recovery contract test unassertable and
+forced a weaker fallback (asserting the Terraform attribute instead of the
+deployed state).
+
+**Observed:** it is implemented on `localstack/localstack:4`, and returns a
+real value rather than a stub default. Checked directly against the container,
+not only through the passing test:
+
+```
+$ docker compose exec -T localstack awslocal dynamodb describe-continuous-backups \
+    --table-name ephemeral-infra-receipts
+{
+    "ContinuousBackupsDescription": {
+        "ContinuousBackupsStatus": "ENABLED",
+        "PointInTimeRecoveryDescription": {
+            "PointInTimeRecoveryStatus": "ENABLED"
+        }
+    }
+}
+```
+
+**Workaround:** none needed. `test_receipts_table_has_point_in_time_recovery`
+asserts against the live API response, as originally intended.
+
+## Asynchronous dead-letter routing latency
+
+**Expected:** a Lambda invocation that fails at the infrastructure level
+(an uncaught exception) would route to the configured SQS dead-letter queue
+quickly enough for a test to wait on it.
+
+**Observed:** routing took roughly **four minutes**. A receipt that was valid
+JSON with all required fields but an unusable value (`total_cents: "abc"`)
+crashed the handler; LocalStack retried it twice at roughly 60-second
+intervals — three invocations in total — before the message appeared on the
+queue:
+
+```
+$ docker compose logs localstack | grep invocations
+... POST /_localstack_lambda/.../invocations/7308eb98-.../error => 202   15:58:44
+... POST /_localstack_lambda/.../invocations/7308eb98-.../error => 202   15:59:45
+
+$ awslocal sqs get-queue-attributes --queue-url .../ephemeral-infra-processor-dlq \
+    --attribute-names ApproximateNumberOfMessages
+messages=1
+```
+
+That interval matches Lambda's documented asynchronous retry behaviour, so
+this reads as emulated semantics rather than slowness — but the wall-clock
+cost is real for a test loop that targets four minutes end to end.
+
+**Workaround:** no test waits for dead-lettering. The suite's malformed-input
+test asserts the DLQ stays *empty* and, in the same test, that the handler
+logged a rejection for each bad object — the log assertion is what closes the
+four-minute window, since a queue read taken moments after an upload cannot on
+its own distinguish "rejected cleanly" from "crashed, not routed yet". The
+positive path (a message does arrive on genuine failure) is therefore observed
+but **not asserted by any test**. Adding
+`aws_lambda_function_event_invoke_config` with `maximum_retry_attempts = 0`
+would collapse the window; it was considered and deliberately not added, since
+the log-based assertion achieves the same soundness without new
+infrastructure.
+
+## Docker-in-Docker Lambda execution on GitHub-hosted runners
+
+**Expected:** `LAMBDA_RUNTIME_EXECUTOR: docker` requires LocalStack to spawn
+sibling containers through the mounted Docker socket. This is the component
+most likely to behave differently on a CI runner than on a laptop, and a
+fallback executor mode was held in reserve.
+
+**Observed:** it worked unmodified on `ubuntu-latest`. The same
+`docker-compose.yml`, with the same socket mount, provisioned and invoked the
+function on the first CI run, and the `make test` step — which includes two
+tests that depend on a real Lambda invocation — measured 15.0 s on run
+`34705348618`. GitHub-hosted runners expose a genuine, non-sandboxed Docker
+daemon, unlike some sandboxed development environments.
+
+**Workaround:** none needed. No CI-specific executor configuration exists in
+this repository.
+
+## SQS queue deletion time
+
+**Expected:** `terraform destroy` time to be dominated by the Lambda function
+and its supporting IAM and log resources.
+
+**Observed:** `aws_sqs_queue.dlq` was the single longest operation in teardown,
+at roughly 42 s locally — the dominant term in a `make destroy` that measures
+65.0 s in CI. It completes correctly; it is only slow.
+
+**Workaround:** none needed, and none taken. Recorded because it explains the
+destroy figure in the README's comparison table, and because a stack that adds
+several queues would feel it.
