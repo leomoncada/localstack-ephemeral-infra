@@ -1,0 +1,75 @@
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+# No AWS credentials are configured anywhere in this workflow, and no
+# repository secrets are used. That is the point: the whole stack is
+# provisioned, tested, and torn down against LocalStack with dummy
+# credentials only.
+env:
+  AWS_ENDPOINT_URL: http://localhost:4566
+  AWS_ACCESS_KEY_ID: test
+  AWS_SECRET_ACCESS_KEY: test
+  AWS_REGION: us-east-1
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.14.8
+          terraform_wrapper: false
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - uses: terraform-linters/setup-tflint@v4
+        with:
+          tflint_version: v0.64.0
+
+      - name: Install checkov
+        # Pinned to the version validated locally (`checkov --version`), for
+        # the same reproducibility reason the rest of this workflow avoids
+        # floating references. See the design note below on why this runs
+        # as a plain pip install rather than bridgecrewio/checkov-action.
+        run: pip install checkov==3.3.13
+
+      - name: Lint
+        # `make lint` is the single source of truth for fmt/validate/tflint/
+        # checkov: it's what a developer runs locally, so CI runs exactly
+        # that instead of re-typing each command and risking drift. It also
+        # runs `tflint --init`, which is what installs the AWS ruleset
+        # declared in .tflint.hcl -- setup-tflint installs the binary only.
+        # The one thing `make lint` does not do for a fresh checkout is
+        # install providers and modules (normally satisfied by `make apply`'s
+        # `init` dependency once a developer has provisioned locally at least
+        # once), so that is done explicitly here with `-backend=false` --
+        # lint must not need the LocalStack backend, only the schemas.
+        # infra/.terraform.lock.hcl is committed and carries linux_amd64
+        # hashes, so this resolves the same provider builds CI and a laptop
+        # both verified.
+        run: |
+          terraform -chdir=infra init -backend=false
+          make lint
+
+      - name: Start LocalStack
+        run: make up
+
+      - name: Provision
+        run: make apply
+
+      - name: Test
+        run: make test
+
+      - name: Destroy
+        if: always()
+        run: make destroy
