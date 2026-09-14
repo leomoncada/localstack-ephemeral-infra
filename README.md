@@ -2,7 +2,7 @@
 
 ![ci](https://github.com/leomoncada/localstack-ephemeral-infra/actions/workflows/ci.yml/badge.svg)
 
-A receipt-ingestion stack — S3, Lambda, DynamoDB, IAM, CloudWatch Logs, SQS — provisioned,
+A receipt-ingestion stack (S3, Lambda, DynamoDB, IAM, CloudWatch Logs, SQS) provisioned,
 integration-tested and destroyed on every pull request, with no AWS account and no credentials
 anywhere in CI.
 
@@ -17,7 +17,7 @@ measurements are less flattering than the slogan.
 
 ## Quickstart
 
-Requires Docker, Terraform (>= 1.11; CI pins 1.14.8), Python 3.12 and `make`. Nothing else — no AWS
+Requires Docker, Terraform (>= 1.11; CI pins 1.14.8), Python 3.12 and `make`. Nothing else: no AWS
 account, no credentials, no `awscli` configuration. The floor is 1.11 because the S3 backend locks
 with `use_lockfile`, which landed in 1.10 and is GA in 1.11.
 
@@ -28,7 +28,7 @@ make test     # run the suite
 make destroy  # tear it down
 ```
 
-`make lint` runs `terraform fmt -check`, `terraform validate`, `tflint` and `checkov` — the same
+`make lint` runs `terraform fmt -check`, `terraform validate`, `tflint` and `checkov`, the same
 four commands CI runs, from the same target, so they cannot drift apart. `tflint` runs `--init`
 first (it needs the AWS ruleset from `.tflint.hcl`; without it only the bundled Terraform ruleset
 loads and no `aws_*` rule fires) and `--recursive`, so it reaches `infra/modules/*` where every AWS
@@ -53,7 +53,7 @@ retention.
 
 One customer-managed KMS key encrypts the bucket, the table, the dead-letter queue and the log
 group. That is not decoration: those four resources previously carried `checkov:skip` comments
-claiming KMS was unavailable because it was absent from `docker-compose.yml`'s `SERVICES` — a
+claiming KMS was unavailable because it was absent from `docker-compose.yml`'s `SERVICES`, a
 circular argument from a file this repository writes, and wrong about LocalStack, which has started
 services lazily since 2.0. Enabling it deleted four suppressions. The one place it did not work is
 recorded in [`PARITY-NOTES.md`](PARITY-NOTES.md).
@@ -61,10 +61,10 @@ recorded in [`PARITY-NOTES.md`](PARITY-NOTES.md).
 Unlike the properties listed above it, **the key configuration is not asserted by any test.** It was
 verified during development by reading the CMK ARN back from each resource's live API
 (`get-bucket-encryption`, `describe-table`, `get-queue-attributes`, `describe-log-groups`), and that
-output is in [`PARITY-NOTES.md`](PARITY-NOTES.md) — but nothing in the suite would notice if it
+output is in [`PARITY-NOTES.md`](PARITY-NOTES.md), but nothing in the suite would notice if it
 regressed. Read it as configured and manually verified, not as executable policy.
 
-Terraform state lives in an S3 backend with `use_lockfile = true` — inside LocalStack for the local
+Terraform state lives in an S3 backend with `use_lockfile = true`, inside LocalStack for the local
 target, created by an init hook at container start so `terraform init` works against a cold
 container with no bootstrap step.
 
@@ -117,7 +117,7 @@ two worlds is one string and one backend config file.
 What the code does contain is provider-level endpoint configuration, and that is worth being precise
 about rather than glossing: **this is the second-choice mechanism.** The first choice was to
 configure nothing at all in the provider and let the `AWS_ENDPOINT_URL` environment variable do the
-work. That was tried first and did not work — `terraform apply` hung indefinitely and LocalStack
+work. That was tried first and did not work: `terraform apply` hung indefinitely and LocalStack
 never saw the request. What was and was not established about why is recorded in
 [`PARITY-NOTES.md`](PARITY-NOTES.md); the honest summary is that the request did not arrive, and the
 cause was not isolated. The `endpoints` block is the fallback, and it is dormant when the variable
@@ -159,8 +159,8 @@ general disclaimer:
   leaving the caller to remember.
 - **LocalStack is the more permissive of the two targets.** The lifecycle rule in `ingest-bucket`
   now carries `filter {}` because the real S3 API requires every rule to specify exactly one of
-  `filter` or `prefix`, while LocalStack accepts a rule with neither. That specific one is fixed —
-  it was found by reading the S3 API contract, not by running against AWS — but it is the shape of
+  `filter` or `prefix`, while LocalStack accepts a rule with neither. That specific one is fixed,
+  it was found by reading the S3 API contract, not by running against AWS, but it is the shape of
   the risk: a resource that applies cleanly here can still be rejected there.
 
 `var.log_retention_days` is a third; it has its own section below.
@@ -188,8 +188,8 @@ deliberate choice between the two, not ignorance of the recommended path.
 
 LocalStack figures are **measured**, from GitHub Actions run
 [`34705348618`](https://github.com/leomoncada/localstack-ephemeral-infra/actions/runs/34705348618)
-(job step `started_at`/`completed_at`). Real-AWS figures were **not measured** — no apply against a
-real account has been run — so every cell in that column is an estimate and is labelled as one in
+(job step `started_at`/`completed_at`). Real-AWS figures were **not measured**, because no apply against a
+real account has been run, so every cell in that column is an estimate and is labelled as one in
 the table itself. That run predates the KMS key and its alias, so the timings below describe the
 same stack two resources lighter; they have not been re-measured.
 
@@ -198,7 +198,7 @@ same stack two resources lighter; they have not been re-measured.
 | `terraform apply` | **70.0 s** (includes `terraform init`) | ~1–2 min *(typical for a stack this size; estimated, not measured here)* |
 | `terraform destroy` | **65.0 s** | ~1–2 min *(typical for a stack this size; estimated, not measured here)* |
 | Test suite (7 tests) | **15.0 s** (includes venv build) | *(not measured here)* |
-| Full CI run | **255.0 s (4 m 15 s)** | — |
+| Full CI run | **255.0 s (4 m 15 s)** | not measured |
 | AWS credentials in CI | none | required |
 | Cost per run | $0 | metered |
 
@@ -223,21 +223,21 @@ Two things that table does not say, and should:
   fifteen resources, a real-AWS apply is in the same order of magnitude. The speed argument in the
   thesis gets stronger as a stack grows and as the loop repeats; it is not carried by this stack's
   apply time alone.
-- **What is unambiguous is the rest of the row.** The full cycle — provision, integration-test
-  against live resources, tear down — runs on every pull request with zero repository secrets, zero
+- **What is unambiguous is the rest of the row.** The full cycle (provision, integration-test
+  against live resources, tear down) runs on every pull request with zero repository secrets, zero
   spend, zero shared-account contention, and a teardown that cannot leave anything billable behind,
   because `make down` discards the entire backing store.
 
-## What is tested — and what is not
+## What is tested, and what is not
 
 Seven tests, run against the live resources (not against the Terraform plan):
 
-**Contract tests** — point-in-time recovery is enabled; bucket versioning is enabled; all public
+**Contract tests:** point-in-time recovery is enabled; bucket versioning is enabled; all public
 access is blocked; the log group's retention is finite; the execution role has no attached managed
 policies and no inline statement with `Resource: "*"`. These are executable policy, asserted against
 the deployed state of the world, which is a stronger claim than a static-analysis pass.
 
-**Flow tests** — a valid receipt uploaded to S3 arrives in DynamoDB with the right shape; a
+**Flow tests:** a valid receipt uploaded to S3 arrives in DynamoDB with the right shape; a
 malformed upload is rejected cleanly.
 
 **The dead-letter queue, stated precisely.** An SQS DLQ is provisioned, wired as the Lambda's
@@ -272,5 +272,5 @@ leaving it to sit quietly inside a `#checkov:skip` comment.
 each divergence and each anticipated-risk-that-did-not-materialise found while building this. It
 covers endpoint targeting, S3 native state locking, `describe_continuous_backups`,
 `AWS_ENDPOINT_URL` injection into the Lambda container, customer-managed KMS keys, dead-letter
-latency, SQS teardown time, and the Docker-in-Docker Lambda executor on GitHub-hosted runners. Notes, not grievances — several entries record things that
+latency, SQS teardown time, and the Docker-in-Docker Lambda executor on GitHub-hosted runners. Notes, not grievances: several entries record things that
 worked.
