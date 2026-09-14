@@ -57,6 +57,14 @@ jobs:
         # infra/.terraform.lock.hcl is committed and carries linux_amd64
         # hashes, so this resolves the same provider builds CI and a laptop
         # both verified.
+        # tflint --init downloads the AWS ruleset from the GitHub API. That
+        # request is unauthenticated by default, so it is rate limited per
+        # runner IP and hosted runners share those: this step failed with a
+        # 403 on a pull request that touched only prose. tflint reads
+        # GITHUB_TOKEN for plugin downloads, and the token every workflow run
+        # already has is enough to lift the limit.
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           terraform -chdir=infra init -backend=false
           make lint
