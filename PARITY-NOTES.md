@@ -9,16 +9,16 @@ failures overstates them.
 
 ## Endpoint targeting
 
-**Chosen mechanism:** variant B — the empty-string endpoint pattern
+**Chosen mechanism:** variant B, the empty-string endpoint pattern
 (`endpoints { s3 = var.aws_endpoint_url ... }` with `s3_use_path_style`,
 `skip_credentials_validation`, `skip_metadata_api_check`, and
 `skip_requesting_account_id` all gated on `var.aws_endpoint_url != ""`).
 Variant A (pure `AWS_ENDPOINT_URL` env var, no provider-level endpoint
 configuration) was the preferred design and was tried first, but failed.
 
-**Expected:** variant A — setting `AWS_ENDPOINT_URL=http://localhost:4566`
+**Expected:** variant A, setting `AWS_ENDPOINT_URL=http://localhost:4566`
 plus dummy credentials, with zero endpoint configuration in the provider
-block — would let `terraform apply` transparently target LocalStack.
+block, would let `terraform apply` transparently target LocalStack.
 
 **Observed:** `terraform init` and `terraform plan` succeeded, but
 `terraform apply` hung indefinitely on `aws_s3_bucket.probe: Still
@@ -26,26 +26,26 @@ creating...` past 4 minutes with no error. The process was killed manually
 after the timebox made it clear this was not going to resolve. The decisive
 check was negative: `awslocal s3api list-buckets` inside the container
 stayed empty for the whole 4 minutes, so the bucket was never created in
-LocalStack. That is the only thing confirmed — the request did not reach
+LocalStack. That is the only thing confirmed: the request did not reach
 LocalStack. Where it actually went, and why it hung rather than erroring,
 is **undetermined**. Two explanations are consistent with the symptom and
 neither was ruled out:
   - the global `AWS_ENDPOINT_URL` env var was not honored by the AWS
     provider v6.64.0 for this S3 call, so the request went to real AWS and
     stalled there instead of failing fast; or
-  - the request never left the host at all — network egress being blocked
+  - the request never left the host at all, network egress being blocked
     or silently dropped (sandboxed shell, firewall dropping SYNs) produces
     an identical indefinite hang with LocalStack never seeing anything.
 
   The first explanation cannot be asserted with confidence: the variant-B
   fallback test below shows real AWS rejecting the same `test`/`test`
-  credentials **fast**, with a non-retryable `403 InvalidClientTokenId` — if
+  credentials **fast**, with a non-retryable `403 InvalidClientTokenId`, and if
   bad credentials fail fast there, they cannot also explain a 4-minute
   hang here. No packet capture or egress test was run to distinguish the
   two, so the cause is left open rather than asserted.
 
 **Workaround:** the request not reaching LocalStack, for whatever reason,
-means variant A cannot be relied on. Switched to variant B — explicit
+means variant A cannot be relied on. Switched to variant B: explicit
 `endpoints { s3 = ...
 sts = ... iam = ... }` in the provider block, gated by an
 `aws_endpoint_url` variable defaulting to `""`. With
@@ -56,7 +56,7 @@ list-buckets`. The fallback direction was also verified: `terraform plan`
 with the default empty-string endpoint failed with
 `Error: Retrieving AWS account details: ... GetCallerIdentity ... 403
 InvalidClientTokenId: The security token included in the request is
-invalid` — a genuine credentials error against real AWS's STS endpoint, not
+invalid`, a genuine credentials error against real AWS's STS endpoint, not
 an endpoint-parsing error. This confirms the empty-string fallback correctly
 routes to real AWS when no LocalStack endpoint is supplied.
 
@@ -120,7 +120,7 @@ flag, but this is not recommended.
 The `Who` field's user and host identifiers were redacted above; nothing
 else in the block was altered. The `RequestID` differs between independent
 runs (it is per-request), but the `HostID` was checked against an earlier,
-separate test run and is byte-for-byte identical there too — confirming it
+separate test run and is byte-for-byte identical there too, confirming it
 is a static value LocalStack's S3 mock returns, not a hand-typed string.
 
 **Workaround:** none needed. `use_lockfile = true` in the S3 backend block
@@ -152,8 +152,8 @@ the same way the provider block gates its `endpoints` on
 ## `AWS_ENDPOINT_URL` injection into the Lambda container
 
 **Expected:** the Lambda handler would need the endpoint passed to it
-explicitly — a Terraform-set `AWS_ENDPOINT_URL` environment variable on the
-function, conditional on the target — because a `boto3` client built inside
+explicitly (a Terraform-set `AWS_ENDPOINT_URL` environment variable on the
+function, conditional on the target) because a `boto3` client built inside
 the function has no way to know it is running in LocalStack. That would have
 meant target-specific configuration reaching into application code, which is
 the one thing the repository's thesis claims is unnecessary.
@@ -170,7 +170,7 @@ AWS_ENDPOINT_URL=http://172.20.0.2:4566
 RECEIPTS_TABLE=ephemeral-infra-receipts
 ```
 
-Terraform sets only `RECEIPTS_TABLE` — confirmed by
+Terraform sets only `RECEIPTS_TABLE`, confirmed by
 `awslocal lambda get-function-configuration --query 'Environment'`, which
 returns that single variable. The `AWS_ENDPOINT_URL` entry is LocalStack's,
 not ours.
@@ -185,7 +185,7 @@ a build-time switch.
 
 ## DynamoDB `describe_continuous_backups`
 
-**Expected:** a risk flagged before implementation — that
+**Expected:** a risk flagged before implementation, that
 `describe_continuous_backups` might be unimplemented on Community tier, which
 would have made the point-in-time-recovery contract test unassertable and
 forced a weaker fallback (asserting the Terraform attribute instead of the
@@ -301,7 +301,7 @@ quickly enough for a test to wait on it.
 **Observed:** routing took roughly **four minutes**. A receipt that was valid
 JSON with all required fields but an unusable value (`total_cents: "abc"`)
 crashed the handler; LocalStack retried it twice at roughly 60-second
-intervals — three invocations in total — before the message appeared on the
+intervals (three invocations in total) before the message appeared on the
 queue:
 
 ```
@@ -315,12 +315,12 @@ messages=1
 ```
 
 That interval matches Lambda's documented asynchronous retry behaviour, so
-this reads as emulated semantics rather than slowness — but the wall-clock
+this reads as emulated semantics rather than slowness, but the wall-clock
 cost is real for a test loop that targets four minutes end to end.
 
 **Workaround:** no test waits for dead-lettering. The suite's malformed-input
 test asserts the DLQ stays *empty* and, in the same test, that the handler
-logged a rejection for each bad object — the log assertion is what closes the
+logged a rejection for each bad object, and the log assertion is what closes the
 four-minute window, since a queue read taken moments after an upload cannot on
 its own distinguish "rejected cleanly" from "crashed, not routed yet". The
 positive path (a message does arrive on genuine failure) is therefore observed
@@ -339,8 +339,8 @@ fallback executor mode was held in reserve.
 
 **Observed:** it worked unmodified on `ubuntu-latest`. The same
 `docker-compose.yml`, with the same socket mount, provisioned and invoked the
-function on the first CI run, and the `make test` step — which includes two
-tests that depend on a real Lambda invocation — measured 15.0 s on run
+function on the first CI run, and the `make test` step, which includes two
+tests that depend on a real Lambda invocation, measured 15.0 s on run
 `34705348618`. GitHub-hosted runners expose a genuine, non-sandboxed Docker
 daemon, unlike some sandboxed development environments.
 
@@ -353,7 +353,7 @@ this repository.
 and its supporting IAM and log resources.
 
 **Observed:** `aws_sqs_queue.dlq` was the single longest operation in teardown,
-at roughly 42 s locally — the dominant term in a `make destroy` that measures
+at roughly 42 s locally, the dominant term in a `make destroy` that measures
 65.0 s in CI. It completes correctly; it is only slow.
 
 **Workaround:** none needed, and none taken. Recorded because it explains the
